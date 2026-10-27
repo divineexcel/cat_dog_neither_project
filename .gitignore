@@ -18,6 +18,7 @@ data/
 models/*.keras
 models/*.h5
 models/*.weights
+!models/classifier.keras
 
 # Streamlit
 .streamlit/
