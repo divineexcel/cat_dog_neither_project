@@ -15,7 +15,7 @@ import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 from image_preprocessing import model_views
-from evaluation import evaluate_model, model_sha256
+from evaluation import build_metrics, evaluate_model, model_sha256
 
 ROOT        = Path(__file__).resolve().parent
 MODEL_PATH  = ROOT / "models" / "classifier.keras"
@@ -402,6 +402,7 @@ header[data-testid="stHeader"] { background:transparent; }
 }
 .confusion-table thead th { background:#f3f5ee; color:var(--muted); font-size:11px; letter-spacing:.06em; text-transform:uppercase; }
 .confusion-table tbody th { background:#fafaf7; text-align:left; font:700 13px Outfit,sans-serif; text-transform:capitalize; }
+.confusion-table .correct-cell { background:#e6f4ec; color:#17613a; font-weight:700; }
 .confusion-table tr:last-child th, .confusion-table tr:last-child td { border-bottom:0; }
 .confusion-table th:last-child, .confusion-table td:last-child { border-right:0; }
 .confusion-table .outcome-tp { color:#17613a; font-weight:700; }
@@ -945,6 +946,85 @@ def main() -> None:
                           </div>
                         </div>
                         """, unsafe_allow_html=True)
+
+        # A confusion matrix needs ground-truth labels as well as predictions.
+        # Let the user label each upload, then calculate a batch-specific matrix.
+        st.markdown('<div id="upload-confusion"></div>', unsafe_allow_html=True)
+        st.markdown("### Confusion matrix for these uploads")
+        st.caption(
+            "The model supplies predictions. Select each image’s actual class below; "
+            "only labeled images are included in the live matrix."
+        )
+        label_options = ["Select actual class", *CLASSES]
+        labeled_true, labeled_pred = [], []
+        with st.expander("Label uploaded images", expanded=True):
+            label_cols = st.columns(2)
+            for index, row in enumerate(rows):
+                if row["prediction"] == "error":
+                    continue
+                with label_cols[index % 2]:
+                    actual = st.selectbox(
+                        f"{row['filename']} · model predicted {row['prediction']}",
+                        options=label_options,
+                        key=f"actual_label_{batch['key']}_{index}",
+                    )
+                if actual in CLASSES:
+                    labeled_true.append(CLASSES.index(actual))
+                    labeled_pred.append(CLASSES.index(row["prediction"]))
+
+        if labeled_true:
+            upload_metrics = build_metrics(labeled_true, labeled_pred, list(CLASSES))
+            matrix = upload_metrics["confusion_matrix"]
+            names = upload_metrics["class_names"]
+            st.caption(
+                f"Showing {upload_metrics['n_val']} labeled image(s). "
+                f"{total - upload_metrics['n_val']} classified image(s) still need an actual label."
+            )
+            matrix_headers = "".join(f"<th>{escape(name)}</th>" for name in names)
+            matrix_rows = "".join(
+                "<tr><th>{actual}</th>{cells}</tr>".format(
+                    actual=escape(actual),
+                    cells="".join(
+                        '<td class="{style}">{count}</td>'.format(
+                            style="correct-cell" if row_index == col_index else "",
+                            count=count,
+                        )
+                        for col_index, count in enumerate(row)
+                    ),
+                )
+                for row_index, (actual, row) in enumerate(zip(names, matrix))
+            )
+            st.markdown(f"""
+            <div class="confusion-table-wrap">
+              <table class="confusion-table">
+                <thead><tr><th>Actual ↓ / Predicted →</th>{matrix_headers}</tr></thead>
+                <tbody>{matrix_rows}</tbody>
+              </table>
+            </div>
+            """, unsafe_allow_html=True)
+
+            outcome_rows = []
+            for index, name in enumerate(names):
+                tp = matrix[index][index]
+                fp = sum(matrix[actual][index] for actual in range(len(names)) if actual != index)
+                fn = sum(matrix[index][predicted] for predicted in range(len(names)) if predicted != index)
+                tn = upload_metrics["n_val"] - tp - fp - fn
+                outcome_rows.append(
+                    "<tr><th>{label}</th><td>{tp}</td><td>{tn}</td><td>{fp}</td><td>{fn}</td></tr>".format(
+                        label=escape(name), tp=tp, tn=tn, fp=fp, fn=fn,
+                    )
+                )
+            st.markdown(f"""
+            <div class="confusion-table-wrap">
+              <table class="confusion-table">
+                <thead><tr><th>Class (one vs rest)</th><th>TP</th><th>TN</th><th>FP</th><th>FN</th></tr></thead>
+                <tbody>{''.join(outcome_rows)}</tbody>
+              </table>
+            </div>
+            <p class="confusion-note">TP = true positive · TN = true negative · FP = false positive · FN = false negative.</p>
+            """, unsafe_allow_html=True)
+        else:
+            st.info("Select at least one actual class to build the confusion matrix for this upload batch.")
 
     # ── how it works ──────────────────────────────────────────────────────────
     st.markdown("""
