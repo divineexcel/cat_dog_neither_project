@@ -1,0 +1,53 @@
+{
+  "class_names": [
+    "cat",
+    "dog",
+    "neither"
+  ],
+  "confusion_matrix": [
+    [
+      194,
+      4,
+      0
+    ],
+    [
+      0,
+      204,
+      0
+    ],
+    [
+      2,
+      2,
+      203
+    ]
+  ],
+  "accuracy": 98.7,
+  "precision": 98.7,
+  "recall": 98.7,
+  "f1": 98.7,
+  "per_class": [
+    {
+      "name": "cat",
+      "precision": 99.0,
+      "recall": 98.0,
+      "f1": 98.5,
+      "support": 198
+    },
+    {
+      "name": "dog",
+      "precision": 97.1,
+      "recall": 100.0,
+      "f1": 98.6,
+      "support": 204
+    },
+    {
+      "name": "neither",
+      "precision": 100.0,
+      "recall": 98.1,
+      "f1": 99.0,
+      "support": 207
+    }
+  ],
+  "n_val": 609,
+  "model_sha256": "8051b688ff6317d8f3f2bb08cca589cccef4542aae19b880ae5540da4cd090fc"
+}

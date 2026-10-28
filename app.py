@@ -6,6 +6,8 @@ import base64
 import csv
 import io
 import hashlib
+import json
+from html import escape
 from pathlib import Path
 
 import numpy as np
@@ -13,9 +15,11 @@ import streamlit as st
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 from image_preprocessing import model_views
+from evaluation import evaluate_model, model_sha256
 
 ROOT        = Path(__file__).resolve().parent
 MODEL_PATH  = ROOT / "models" / "classifier.keras"
+METRICS_PATH = ROOT / "models" / "evaluation.json"
 HERO_PATH   = ROOT / "cat_dog_hero.png"
 TARGET_SIZE = (224, 224)
 CLASSES     = ("cat", "dog", "neither")
@@ -381,6 +385,28 @@ header[data-testid="stHeader"] { background:transparent; }
 .step-copy b  { display:block; font-size:14px; color:white; margin-bottom:4px; font-weight:700; }
 .step-copy small { color:rgba(255,255,255,.55); font-size:12px; }
 
+/* ── confusion matrix ── */
+.confusion-panel {
+  background:var(--card); border:1.5px solid var(--line);
+  border-radius:24px; padding:32px 36px; margin:0 0 48px;
+  box-shadow:0 12px 40px rgba(26,58,42,.06);
+}
+.confusion-table-wrap { width:100%; overflow-x:auto; margin-top:18px; }
+.confusion-table {
+  width:100%; min-width:420px; border-collapse:separate; border-spacing:0;
+  border:1px solid var(--line); border-radius:14px; overflow:hidden;
+}
+.confusion-table th, .confusion-table td {
+  padding:13px 16px; text-align:center; border-right:1px solid var(--line);
+  border-bottom:1px solid var(--line); font:500 14px 'DM Mono',monospace;
+}
+.confusion-table thead th { background:#f3f5ee; color:var(--muted); font-size:11px; letter-spacing:.06em; text-transform:uppercase; }
+.confusion-table tbody th { background:#fafaf7; text-align:left; font:700 13px Outfit,sans-serif; }
+.confusion-table .correct-cell { background:#e6f4ec; color:#17613a; font-weight:700; }
+.confusion-table tr:last-child th, .confusion-table tr:last-child td { border-bottom:0; }
+.confusion-table th:last-child, .confusion-table td:last-child { border-right:0; }
+.confusion-note { margin:10px 0 0; color:var(--muted); font-size:12px; line-height:1.5; }
+
 /* ── footer ── */
 .site-footer {
   display:flex; justify-content:space-between; align-items:center;
@@ -453,6 +479,33 @@ def load_model():
     return _load_model(MODEL_PATH.stat().st_mtime_ns)
 
 
+@st.cache_data(show_spinner=False)
+def load_confusion_metrics(model_mtime_ns: int, metrics_mtime_ns: int) -> dict | None:
+    """Read the model-matched report, or evaluate locally if validation data exists."""
+    if not MODEL_PATH.is_file():
+        return None
+
+    try:
+        if METRICS_PATH.is_file():
+            report = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
+            if report.get("model_sha256") == model_sha256(MODEL_PATH):
+                return report
+
+        val_dir = ROOT / "data" / "val"
+        if not val_dir.is_dir():
+            return None
+
+        import keras
+        model = keras.models.load_model(MODEL_PATH)
+        val_ds = keras.utils.image_dataset_from_directory(
+            str(val_dir), image_size=(224, 224), batch_size=32,
+            label_mode="int", shuffle=False,
+        )
+        return evaluate_model(model, val_ds, val_ds.class_names)
+    except Exception:
+        return None
+
+
 def prepare_image(uploaded_file) -> Image.Image:
     raw = uploaded_file.getvalue()
     if len(raw) > MAX_FILE_SIZE:
@@ -513,6 +566,7 @@ def main() -> None:
       <div class="nav-links">
         <a href="#home" class="active">Home</a>
         <a href="#about">About</a>
+        <a href="#performance">Confusion Matrix</a>
         <a href="#how-it-works">How it works</a>
         <a href="#results">Results</a>
       </div>
@@ -580,6 +634,46 @@ def main() -> None:
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # ── validation confusion matrix ─────────────────────────────────────────
+    metrics = load_confusion_metrics(
+        MODEL_PATH.stat().st_mtime_ns if MODEL_PATH.is_file() else 0,
+        METRICS_PATH.stat().st_mtime_ns if METRICS_PATH.is_file() else 0,
+    )
+    if metrics:
+        names = metrics["class_names"]
+        headings = "".join(f"<th>{escape(name)}</th>" for name in names)
+        rows = "".join(
+            "<tr><th>{label}</th>{cells}</tr>".format(
+                label=escape(actual),
+                cells="".join(
+                    '<td class="{style}">{count}</td>'.format(
+                        style="correct-cell" if row_index == col_index else "",
+                        count=count,
+                    )
+                    for col_index, count in enumerate(row)
+                ),
+            )
+            for row_index, (actual, row) in enumerate(zip(names, metrics["confusion_matrix"]))
+        )
+        st.markdown(f"""
+        <div id="performance" class="confusion-panel">
+          <div class="section-eyebrow">Model Performance</div>
+          <h2 style="font:700 30px/1.1 Outfit,sans-serif;letter-spacing:-.03em;margin:0 0 8px;">
+            Validation <em style="color:var(--amber);font-style:italic;">Confusion Matrix</em>
+          </h2>
+          <p style="color:var(--muted);font-size:14px;margin:0;">
+            Model predictions for {metrics['n_val']} validation images.
+          </p>
+          <div class="confusion-table-wrap">
+            <table class="confusion-table">
+              <thead><tr><th>Actual ↓ / Predicted →</th>{headings}</tr></thead>
+              <tbody>{rows}</tbody>
+            </table>
+          </div>
+          <p class="confusion-note">Rows show the true class; columns show the model’s prediction. Highlighted diagonal cells are correct predictions.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
     # ── ticker strip ─────────────────────────────────────────────────────────
     st.markdown("""

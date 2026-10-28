@@ -4,12 +4,14 @@ import tensorflow as tf
 import keras
 from keras import layers, models
 from PIL import Image
+from evaluation import evaluate_model, save_metrics_report
 
 IMG_SIZE = (224, 224)
 BATCH_SIZE = 32
 EPOCHS = 6
 RESUME_EPOCHS = 1
 MODEL_PATH = "models/classifier.keras"
+METRICS_PATH = "models/evaluation.json"
 HARD_EXAMPLE = Path("data/train/neither/human_group_01.jpg")
 HARD_EXAMPLE_COPIES = 200
 
@@ -107,6 +109,9 @@ def main():
 
     os.makedirs("models", exist_ok=True)
     model.save(MODEL_PATH)
+    metrics = evaluate_model(model, val_ds, class_names)
+    save_metrics_report(metrics, MODEL_PATH, METRICS_PATH)
+    print(f"Validation metrics saved to {METRICS_PATH}")
     print(f"\nTraining complete! Saved model to {MODEL_PATH}")
 
 if __name__ == "__main__":
