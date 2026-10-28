@@ -401,10 +401,12 @@ header[data-testid="stHeader"] { background:transparent; }
   border-bottom:1px solid var(--line); font:500 14px 'DM Mono',monospace;
 }
 .confusion-table thead th { background:#f3f5ee; color:var(--muted); font-size:11px; letter-spacing:.06em; text-transform:uppercase; }
-.confusion-table tbody th { background:#fafaf7; text-align:left; font:700 13px Outfit,sans-serif; }
-.confusion-table .correct-cell { background:#e6f4ec; color:#17613a; font-weight:700; }
+.confusion-table tbody th { background:#fafaf7; text-align:left; font:700 13px Outfit,sans-serif; text-transform:capitalize; }
 .confusion-table tr:last-child th, .confusion-table tr:last-child td { border-bottom:0; }
 .confusion-table th:last-child, .confusion-table td:last-child { border-right:0; }
+.confusion-table .outcome-tp { color:#17613a; font-weight:700; }
+.confusion-table .outcome-tn { color:#245c45; }
+.confusion-table .outcome-fp, .confusion-table .outcome-fn { color:#b45309; }
 .confusion-note { margin:10px 0 0; color:var(--muted); font-size:12px; line-height:1.5; }
 
 /* ── footer ── */
@@ -642,36 +644,38 @@ def main() -> None:
     )
     if metrics:
         names = metrics["class_names"]
-        headings = "".join(f"<th>{escape(name)}</th>" for name in names)
-        rows = "".join(
-            "<tr><th>{label}</th>{cells}</tr>".format(
-                label=escape(actual),
-                cells="".join(
-                    '<td class="{style}">{count}</td>'.format(
-                        style="correct-cell" if row_index == col_index else "",
-                        count=count,
-                    )
-                    for col_index, count in enumerate(row)
-                ),
+        matrix = metrics["confusion_matrix"]
+        total = metrics["n_val"]
+        outcome_rows = []
+        for index, name in enumerate(names):
+            tp = matrix[index][index]
+            fp = sum(matrix[actual][index] for actual in range(len(names)) if actual != index)
+            fn = sum(matrix[index][predicted] for predicted in range(len(names)) if predicted != index)
+            tn = total - tp - fp - fn
+            outcome_rows.append(
+                "<tr><th>{label}</th><td class='outcome-tp'>{tp}</td>"
+                "<td class='outcome-tn'>{tn}</td><td class='outcome-fp'>{fp}</td>"
+                "<td class='outcome-fn'>{fn}</td></tr>".format(
+                    label=escape(name), tp=tp, tn=tn, fp=fp, fn=fn,
+                )
             )
-            for row_index, (actual, row) in enumerate(zip(names, metrics["confusion_matrix"]))
-        )
+        rows = "".join(outcome_rows)
         st.markdown(f"""
         <div id="performance" class="confusion-panel">
           <div class="section-eyebrow">Model Performance</div>
           <h2 style="font:700 30px/1.1 Outfit,sans-serif;letter-spacing:-.03em;margin:0 0 8px;">
-            Validation <em style="color:var(--amber);font-style:italic;">Confusion Matrix</em>
+            Validation <em style="color:var(--amber);font-style:italic;">Confusion Matrix Outcomes</em>
           </h2>
           <p style="color:var(--muted);font-size:14px;margin:0;">
-            Model predictions for {metrics['n_val']} validation images.
+            One-versus-rest counts for each class, calculated from {metrics['n_val']} validation images.
           </p>
           <div class="confusion-table-wrap">
             <table class="confusion-table">
-              <thead><tr><th>Actual ↓ / Predicted →</th>{headings}</tr></thead>
+              <thead><tr><th>Class</th><th>TP</th><th>TN</th><th>FP</th><th>FN</th></tr></thead>
               <tbody>{rows}</tbody>
             </table>
           </div>
-          <p class="confusion-note">Rows show the true class; columns show the model’s prediction. Highlighted diagonal cells are correct predictions.</p>
+          <p class="confusion-note"><b>TP</b> true positive · <b>TN</b> true negative · <b>FP</b> false positive · <b>FN</b> false negative. For each row, that class is positive and the other two classes are grouped as negative.</p>
         </div>
         """, unsafe_allow_html=True)
 
