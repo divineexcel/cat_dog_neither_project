@@ -381,6 +381,83 @@ header[data-testid="stHeader"] { background:transparent; }
 .step-copy b  { display:block; font-size:14px; color:white; margin-bottom:4px; font-weight:700; }
 .step-copy small { color:rgba(255,255,255,.55); font-size:12px; }
 
+/* ── metrics section ── */
+.metrics-section {
+  background:var(--card); border:1.5px solid var(--line);
+  border-radius:24px; padding:40px 44px;
+  margin-bottom:48px; box-shadow:0 12px 40px rgba(26,58,42,.06);
+}
+.metrics-grid {
+  display:grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap:16px;
+  margin:28px 0;
+}
+.metric-card {
+  border-radius:20px; padding:24px 20px;
+  display:flex; flex-direction:column; align-items:flex-start;
+  position:relative; overflow:hidden;
+}
+.metric-card::before {
+  content:''; position:absolute; inset:0;
+  border-radius:20px; opacity:.08;
+}
+.metric-card.accuracy  { background:linear-gradient(135deg,#1a3a2a,#245c45); color:white; }
+.metric-card.precision { background:linear-gradient(135deg,#7c3aed,#a855f7); color:white; }
+.metric-card.recall    { background:linear-gradient(135deg,#c2410c,#f0b429); color:white; }
+.metric-card.f1        { background:linear-gradient(135deg,#1d4ed8,#3b7ae0); color:white; }
+.metric-icon { font-size:22px; margin-bottom:12px; }
+.metric-value {
+  font:800 clamp(32px,3.5vw,48px)/1 'Outfit',sans-serif;
+  letter-spacing:-.04em; margin-bottom:6px;
+}
+.metric-label {
+  font:600 11px 'DM Mono',monospace; letter-spacing:.14em;
+  text-transform:uppercase; opacity:.8;
+}
+.metric-desc {
+  font:400 11px 'Outfit',sans-serif; opacity:.65;
+  margin-top:6px; line-height:1.4;
+}
+/* per-class breakdown table */
+.class-table {
+  width:100%; border-collapse:collapse; margin-top:4px;
+}
+.class-table th {
+  font:600 11px 'DM Mono',monospace; color:var(--muted);
+  letter-spacing:.1em; text-transform:uppercase;
+  padding:8px 12px; border-bottom:1.5px solid var(--line);
+  text-align:left;
+}
+.class-table td {
+  padding:10px 12px; font:500 14px 'Outfit',sans-serif;
+  border-bottom:1px solid #f0f1ea;
+}
+.class-table tr:last-child td { border-bottom:none; }
+.class-table .class-pill {
+  display:inline-flex; align-items:center; gap:6px;
+  padding:4px 12px; border-radius:999px;
+  font:700 12px 'Outfit',sans-serif;
+}
+.class-pill.cat     { background:#fdecd8; color:#b85a18; }
+.class-pill.dog     { background:#dbeafe; color:#1d4ed8; }
+.class-pill.neither { background:#ede9fe; color:#6d28d9; }
+.class-pill.avg     { background:#e6f4ec; color:#1a5c38; }
+.bar-cell { min-width:120px; }
+.mini-metric-bar {
+  height:6px; border-radius:99px;
+  background:#eaece4; overflow:hidden; margin-top:4px;
+}
+.mini-metric-fill {
+  height:100%; border-radius:99px;
+  background:linear-gradient(90deg, var(--green), var(--amber));
+}
+.val-badge {
+  display:inline-block;
+  background:linear-gradient(135deg,#1a3a2a,#1e4832);
+  color:var(--amber); border-radius:10px; padding:4px 10px;
+  font:700 13px 'DM Mono',monospace;
+}
 /* ── footer ── */
 .site-footer {
   display:flex; justify-content:space-between; align-items:center;
@@ -451,6 +528,79 @@ def _load_model(model_mtime_ns: int):
 def load_model():
     # Invalidate Streamlit's cached model after train.py replaces the artifact.
     return _load_model(MODEL_PATH.stat().st_mtime_ns)
+
+
+@st.cache_data(show_spinner=False)
+def compute_metrics(model_mtime_ns: int) -> dict | None:
+    """Evaluate the model on the validation set and return metric scores.
+
+    Returns a dict with keys:
+        accuracy, precision, recall, f1  (macro averages)
+        per_class: list of {name, precision, recall, f1, support}
+    Returns None if the model or val data is missing.
+    """
+    val_dir = ROOT / "data" / "val"
+    if not MODEL_PATH.is_file() or not val_dir.is_dir():
+        return None
+
+    try:
+        import keras
+        import tensorflow as tf
+
+        model = keras.models.load_model(MODEL_PATH)
+
+        val_ds = keras.utils.image_dataset_from_directory(
+            str(val_dir),
+            image_size=(224, 224),
+            batch_size=32,
+            label_mode="categorical",
+            shuffle=False,
+        )
+        class_names = val_ds.class_names  # alphabetically sorted by Keras
+
+        y_true_list, y_pred_list = [], []
+        for batch_x, batch_y in val_ds:
+            preds = model.predict(batch_x, verbose=0)
+            y_pred_list.append(np.argmax(preds, axis=1))
+            y_true_list.append(np.argmax(batch_y.numpy(), axis=1))
+
+        y_true = np.concatenate(y_true_list)
+        y_pred = np.concatenate(y_pred_list)
+
+        n_classes = len(class_names)
+        per_class = []
+        for i, cls in enumerate(class_names):
+            tp = int(np.sum((y_true == i) & (y_pred == i)))
+            fp = int(np.sum((y_true != i) & (y_pred == i)))
+            fn = int(np.sum((y_true == i) & (y_pred != i)))
+            support = int(np.sum(y_true == i))
+            prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            rec  = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1   = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+            per_class.append({
+                "name": cls,
+                "precision": round(prec * 100, 1),
+                "recall":    round(rec  * 100, 1),
+                "f1":        round(f1   * 100, 1),
+                "support":   support,
+            })
+
+        # macro averages
+        accuracy  = round(float(np.mean(y_true == y_pred)) * 100, 1)
+        precision = round(float(np.mean([c["precision"] for c in per_class])), 1)
+        recall    = round(float(np.mean([c["recall"]    for c in per_class])), 1)
+        f1_macro  = round(float(np.mean([c["f1"]        for c in per_class])), 1)
+
+        return {
+            "accuracy":  accuracy,
+            "precision": precision,
+            "recall":    recall,
+            "f1":        f1_macro,
+            "per_class": per_class,
+            "n_val":     int(len(y_true)),
+        }
+    except Exception:
+        return None
 
 
 def prepare_image(uploaded_file) -> Image.Image:
@@ -580,6 +730,105 @@ def main() -> None:
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # ── model performance metrics ─────────────────────────────────────────────
+    metrics = compute_metrics(MODEL_PATH.stat().st_mtime_ns if MODEL_PATH.is_file() else 0)
+
+    if metrics:
+        pc = metrics["per_class"]
+        pill_classes = {"cat": "cat", "dog": "dog", "neither": "neither"}
+
+        def _row(cls_info: dict) -> str:
+            pill_cls = pill_classes.get(cls_info["name"], "avg")
+            emoji    = {"cat": "🐱", "dog": "🐶", "neither": "🌀"}.get(cls_info["name"], "")
+            return f"""
+            <tr>
+              <td><span class="class-pill {pill_cls}">{emoji} {cls_info['name'].capitalize()}</span></td>
+              <td>
+                <span class="val-badge">{cls_info['precision']:.1f}%</span>
+                <div class="mini-metric-bar"><div class="mini-metric-fill" style="width:{cls_info['precision']}%"></div></div>
+              </td>
+              <td>
+                <span class="val-badge">{cls_info['recall']:.1f}%</span>
+                <div class="mini-metric-bar"><div class="mini-metric-fill" style="width:{cls_info['recall']}%"></div></div>
+              </td>
+              <td>
+                <span class="val-badge">{cls_info['f1']:.1f}%</span>
+                <div class="mini-metric-bar"><div class="mini-metric-fill" style="width:{cls_info['f1']}%"></div></div>
+              </td>
+              <td style="color:var(--muted);font:400 13px 'DM Mono',monospace">{cls_info['support']}</td>
+            </tr>"""
+
+        rows_html = "".join(_row(c) for c in pc)
+
+        st.markdown(f"""
+        <div class="metrics-section">
+          <div class="section-eyebrow">Model Performance</div>
+          <h2 style="font:700 32px/1.1 Outfit,sans-serif;letter-spacing:-.03em;margin:0 0 6px;">
+            How <em style="color:var(--amber);font-style:italic;">Accurate</em> Is Pawtrait?
+          </h2>
+          <p style="color:var(--muted);font-size:15px;margin:0 0 4px;">
+            Evaluated on <strong>{metrics['n_val']}</strong> validation images &mdash; never seen during training.
+          </p>
+
+          <!-- 4 headline metric cards -->
+          <div class="metrics-grid">
+            <div class="metric-card accuracy">
+              <div class="metric-icon">🎯</div>
+              <div class="metric-value">{metrics['accuracy']:.1f}%</div>
+              <div class="metric-label">Accuracy</div>
+              <div class="metric-desc">Fraction of images classified correctly across all three classes</div>
+            </div>
+            <div class="metric-card precision">
+              <div class="metric-icon">🔬</div>
+              <div class="metric-value">{metrics['precision']:.1f}%</div>
+              <div class="metric-label">Precision</div>
+              <div class="metric-desc">When it predicts a class, how often it's right (macro avg)</div>
+            </div>
+            <div class="metric-card recall">
+              <div class="metric-icon">📡</div>
+              <div class="metric-value">{metrics['recall']:.1f}%</div>
+              <div class="metric-label">Recall</div>
+              <div class="metric-desc">How many true instances of each class were found (macro avg)</div>
+            </div>
+            <div class="metric-card f1">
+              <div class="metric-icon">⚖️</div>
+              <div class="metric-value">{metrics['f1']:.1f}%</div>
+              <div class="metric-label">F1-Score</div>
+              <div class="metric-desc">Harmonic mean of precision &amp; recall &mdash; balanced measure (macro avg)</div>
+            </div>
+          </div>
+
+          <!-- per-class breakdown -->
+          <div style="margin-top:8px;">
+            <div style="font:700 16px Outfit,sans-serif;margin-bottom:14px;color:var(--ink);">
+              Per-Class Breakdown
+            </div>
+            <table class="class-table">
+              <thead>
+                <tr>
+                  <th>Class</th>
+                  <th>Precision</th>
+                  <th>Recall</th>
+                  <th>F1-Score</th>
+                  <th>Support</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows_html}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    elif MODEL_PATH.is_file():
+        st.markdown("""
+        <div class="metrics-section" style="text-align:center;padding:32px;">
+          <div style="font-size:40px;margin-bottom:12px;">📊</div>
+          <div style="font:600 16px Outfit,sans-serif;color:var(--muted);">Validation data not found — metrics unavailable</div>
+          <div style="font:400 13px DM Mono,monospace;color:var(--muted);margin-top:6px;">Ensure <code>data/val/</code> exists with labelled subfolders.</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # ── ticker strip ─────────────────────────────────────────────────────────
     st.markdown("""
